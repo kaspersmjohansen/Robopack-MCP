@@ -56,7 +56,7 @@ Example Claude Desktop config (`claude_desktop_config.json`):
 | `robopack_get_app` | no | App details and versions |
 | `robopack_import_app` | **yes** | Import an app, returns package ID |
 | `robopack_list_packages` / `robopack_get_package` | no | Package list, state, issues |
-| `robopack_download_package` | no (local write) | Save package to the download dir |
+| `robopack_download_package` | no (local write) | Save package to the download dir. Format defaults to PSADT; request others explicitly. |
 | `robopack_create_package` | **yes** | Create a blank package |
 | `robopack_upload_package_file` | **yes** | Upload a file into a package |
 | `robopack_finalize_package` | **yes** | Finalize uploaded content |

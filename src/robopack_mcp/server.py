@@ -64,16 +64,18 @@ def _preview(action: str, details: dict[str, Any]) -> dict[str, Any]:
 
 @mcp.tool()
 async def robopack_search_apps(
-    filters: dict[str, Any] | None = None,
+    search: str | None = None,
+    verified: bool | None = None,
     page: int | None = None,
     items_per_page: int | None = None,
 ) -> Any:
     """Search repository apps that can be imported into the organization.
 
-    `filters` is passed through as query parameters. The v1 article does not
-    list the filter names, so check the in-app docs for the exact keys.
+    `search` matches app names (verified against the live API: `search=7-Zip`
+    returns 7-Zip first; other keys such as `name` or `query` are ignored).
+    `verified=True` limits results to verified apps.
     """
-    params = {**(filters or {}), **_paging(page, items_per_page)}
+    params = {"search": search, "verified": verified, **_paging(page, items_per_page)}
     return await client().get_json("app", params=params)
 
 
@@ -110,10 +112,10 @@ async def robopack_import_app(
     details = {"app_id": app_id, "scope": scope, "version_id": version_id}
     if not confirm:
         return _preview("import_app", details)
-    body = {"scope": scope}
-    if version_id:
-        body["versionId"] = version_id
-    return await client().post_json(f"app/import/{app_id}", body)
+    # The live API reads scope and versionId from the query string. In the JSON body
+    # they are silently ignored, so a user-scope import falls back to machine scope.
+    params = {"scope": scope, "versionId": version_id}
+    return await client().post_json(f"app/import/{app_id}", None, params=params)
 
 
 # ---------------------------------------------------------------- packages
@@ -133,14 +135,15 @@ async def robopack_get_package(package_id: str) -> Any:
 @mcp.tool()
 async def robopack_download_package(
     package_id: str,
-    format: Literal["IntuneWin", "PSADT", "SourceFiles", "AppV", "MSIX", "CIM", "VHD", "VHDX"],
     output_name: str,
+    format: Literal["PSADT", "IntuneWin", "SourceFiles", "AppV", "MSIX", "CIM", "VHD", "VHDX"] = "PSADT",
     no_script_wrap: bool = False,
     template_id: str | None = None,
 ) -> dict[str, Any]:
     """Download a package to ROBOPACK_DOWNLOAD_DIR. Returns the saved path and size.
 
-    `format` must be one the package supports. MSIX-only formats apply to MSIX packages.
+    Defaults to PSADT. Any other format must be requested explicitly.
+    MSIX-only formats apply to MSIX packages. `no_script_wrap` and `template_id` apply to IntuneWin.
     """
     base = _sandbox("ROBOPACK_DOWNLOAD_DIR", "robopack-downloads")
     base.mkdir(parents=True, exist_ok=True)
@@ -260,10 +263,14 @@ async def robopack_upload_to_tenant(
     With wait=True a failed upload returns HTTP 400. Poll
     robopack_get_tenant_upload_status until the state is Completed, Error or Canceled.
     """
-    body = {"packageId": package_id, "wait": wait, "uploadMsixAsWin32": upload_msix_as_win32}
+    # The live API rejects packageId in the JSON body ("packageId field is required")
+    # and accepts it as a query parameter, so it is sent that way.
+    body = {"wait": wait, "uploadMsixAsWin32": upload_msix_as_win32}
     if not confirm:
-        return _preview("upload_to_tenant", {"tenant_id": tenant_id, **body})
-    return await client().post_json(f"tenant/{tenant_id}/upload", body)
+        return _preview("upload_to_tenant", {"tenant_id": tenant_id, "packageId": package_id, **body})
+    return await client().post_json(
+        f"tenant/{tenant_id}/upload", body, params={"packageId": package_id}
+    )
 
 
 @mcp.tool()
