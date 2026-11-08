@@ -133,3 +133,137 @@ def test_chunked_upload_sends_offset_and_chunk_numbers(monkeypatch, tmp_path):
         {"index": 0, "size": 10, "offset": 40, "chunk": 2},
     ]
     assert b"".join(c[2] for c in calls) == (base / "big.msix").read_bytes()
+
+
+def _upload_dir(monkeypatch, tmp_path, name, data):
+    base = tmp_path / "uploads"
+    base.mkdir(exist_ok=True)
+    (base / name).write_bytes(data)
+    monkeypatch.setenv("ROBOPACK_UPLOAD_DIR", str(base))
+    return base
+
+
+def test_custom_package_preview_makes_no_calls(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "app.msi", b"x" * 30)
+
+    def boom():
+        raise AssertionError("client must not be called without confirm=True")
+
+    monkeypatch.setattr(server, "client", boom)
+    result = run(server.robopack_create_custom_package("app.msi", "App", "msi"))
+    assert result["status"] == "not_executed"
+    assert result["details"]["chunks"] == 1
+
+
+def test_custom_package_rejects_extension_mismatch(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "app.exe", b"x")
+    with pytest.raises(ValueError):
+        run(server.robopack_create_custom_package("app.exe", "App", "msi", confirm=True))
+
+
+def test_custom_package_runs_create_upload_finalize_then_waits(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "app.exe", b"0123456789" * 3)  # 30 bytes
+    calls = []
+
+    class FakeClient:
+        async def post_json(self, path, body=None, **kwargs):
+            calls.append(("post", path, body, kwargs.get("params")))
+            if path == "package/create":
+                return {"id": "pkg-9"}
+            return None
+
+        async def get_json(self, path):
+            calls.append(("get", path))
+            return {"state": "Completed", "issues": []}
+
+    monkeypatch.setattr(server, "client", lambda: FakeClient())
+    result = run(server.robopack_create_custom_package(
+        "app.exe", "My App", "exe", publisher="Contoso", version="1.2.3",
+        install_command="setup.exe /S", uninstall_command="uninstall.exe /S",
+        chunk_bytes=10, confirm=True,
+    ))
+
+    assert result == {"package_id": "pkg-9", "state": "Completed", "issues": [],
+                      "bytes": 30, "chunks_uploaded": 3}
+    assert calls[0][:3] == ("post", "package/create", {
+        "name": "My App", "sourceType": "exe", "publisher": "Contoso", "version": "1.2.3",
+        "installCommand": "setup.exe /S", "uninstallCommand": "uninstall.exe /S",
+    })
+    assert [c[3]["offset"] for c in calls if c[0] == "post" and c[1] == "package/content/pkg-9"] == [0, 10, 20]
+    assert calls[-2][:2] == ("post", "package/content/pkg-9/finalize")
+    assert calls[-1] == ("get", "package/pkg-9")
+
+
+class _RecordingClient:
+    def __init__(self):
+        self.calls = []
+
+    async def post_json(self, path, body=None, **kwargs):
+        self.calls.append(("post", path, body))
+        return {"ok": True}
+
+    async def get_json(self, path, **kwargs):
+        self.calls.append(("get", path))
+        return {}
+
+
+def test_flow_writes_do_not_run_without_confirm(monkeypatch):
+    def boom():
+        raise AssertionError("client must not be called without confirm=True")
+
+    monkeypatch.setattr(server, "client", boom)
+    assert run(server.robopack_create_flow(package_id="p-1"))["status"] == "not_executed"
+    assert run(server.robopack_add_deployment("f-1", "p-1"))["status"] == "not_executed"
+    assert run(server.robopack_start_deployment("d-1"))["status"] == "not_executed"
+    assert run(server.robopack_stop_deployment("d-1"))["status"] == "not_executed"
+    assert run(server.robopack_update_deployment_content("d-1"))["status"] == "not_executed"
+
+
+def test_create_flow_needs_exactly_one_source(monkeypatch):
+    monkeypatch.setattr(server, "client", lambda: _RecordingClient())
+    with pytest.raises(ValueError):
+        run(server.robopack_create_flow(confirm=True))
+    with pytest.raises(ValueError):
+        run(server.robopack_create_flow(package_id="p-1", app_id="a-1", confirm=True))
+
+
+def test_create_flow_maps_scope_and_sends_body(monkeypatch):
+    fake = _RecordingClient()
+    monkeypatch.setattr(server, "client", lambda: fake)
+    run(server.robopack_create_flow(
+        package_id="p-1", scope="User", flags=1, patch_group_id="g-1",
+        supersedence_history_count=2, confirm=True,
+    ))
+    assert fake.calls == [("post", "flow/create", {
+        "packageId": "p-1", "scope": 2, "flags": 1, "patchGroupId": "g-1",
+        "supersedenceHistoryCount": 2,
+    })]
+
+
+def test_create_flow_rejects_out_of_range_supersedence(monkeypatch):
+    monkeypatch.setattr(server, "client", lambda: _RecordingClient())
+    with pytest.raises(ValueError):
+        run(server.robopack_create_flow(package_id="p-1", supersedence_history_count=9, confirm=True))
+
+
+def test_add_deployment_and_actions_use_expected_paths(monkeypatch):
+    fake = _RecordingClient()
+    monkeypatch.setattr(server, "client", lambda: fake)
+    run(server.robopack_add_deployment("f-1", "p-1", version="2.0", start_now=True, confirm=True))
+    run(server.robopack_start_deployment("d-1", confirm=True))
+    run(server.robopack_stop_deployment("d-1", confirm=True))
+    run(server.robopack_update_deployment_content("d-1", confirm=True))
+    assert fake.calls == [
+        ("post", "flow/f-1/add-deployment", {"packageId": "p-1", "startNow": True, "version": "2.0"}),
+        ("post", "flow/deployment/d-1/start", None),
+        ("post", "flow/deployment/d-1/stop", None),
+        ("post", "flow/deployment/d-1/update-content", None),
+    ]
+
+
+def test_wave_tools_are_read_only_and_use_expected_paths(monkeypatch):
+    fake = _RecordingClient()
+    monkeypatch.setattr(server, "client", lambda: fake)
+    run(server.robopack_get_wave("w-1"))
+    run(server.robopack_get_wave_live("w-1"))
+    assert fake.calls == [("get", "flow/wave/w-1"), ("get", "flow/wave/w-1/live")]

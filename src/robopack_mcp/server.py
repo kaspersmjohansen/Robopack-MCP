@@ -10,6 +10,7 @@ ROBOPACK_DOWNLOAD_DIR (writes).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 from pathlib import Path
@@ -246,6 +247,195 @@ async def robopack_finalize_package(
     if not confirm:
         return _preview("finalize_package", {"package_id": package_id, **body})
     return await client().post_json(f"package/content/{package_id}/finalize", body)
+
+
+@mcp.tool()
+async def robopack_create_custom_package(
+    file_name: str,
+    name: str,
+    source_type: Literal["msi", "exe"],
+    publisher: str | None = None,
+    version: str | None = None,
+    install_command: str | None = None,
+    uninstall_command: str | None = None,
+    user_context: str | None = None,
+    detection_rules: list[dict[str, Any]] | None = None,
+    chunk_bytes: int | None = None,
+    max_wait_seconds: int = 600,
+    confirm: bool = False,
+) -> Any:
+    """Create a custom MSI or EXE package from a file in ROBOPACK_UPLOAD_DIR in one step.
+
+    Runs create, upload, finalize, then waits until the package is Completed or Error.
+    The file name must end in the source type (.msi or .exe). MSIX is not supported yet.
+    """
+    if Path(file_name).suffix.lower() != f".{source_type}":
+        raise ValueError(f"file_name must end in .{source_type} for source_type {source_type}")
+    base = _sandbox("ROBOPACK_UPLOAD_DIR", "robopack-uploads")
+    path = _safe_path(file_name, base, must_exist=True)
+    size = path.stat().st_size
+    piece = chunk_bytes or size
+    if piece <= 0:
+        raise ValueError("chunk_bytes must be positive")
+    chunks = max(1, -(-size // piece))
+    details = {
+        "name": name, "source_type": source_type, "file": path.name, "bytes": size,
+        "chunks": chunks, "publisher": publisher, "version": version,
+        "install_command": install_command, "uninstall_command": uninstall_command,
+        "user_context": user_context, "detection_rules": detection_rules,
+    }
+    if not confirm:
+        return _preview("create_custom_package", details)
+
+    created = await robopack_create_package(
+        name, source_type, publisher=publisher, version=version,
+        install_command=install_command, uninstall_command=uninstall_command,
+        user_context=user_context, detection_rules=detection_rules, confirm=True,
+    )
+    package_id = created["id"]
+    try:
+        await robopack_upload_package_file(
+            package_id, path.name, index=0,
+            chunk_bytes=chunk_bytes, confirm=True,
+        )
+        await robopack_finalize_package(
+            package_id, [{"fileName": path.name, "fileSize": size}], confirm=True,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Package {package_id} was created but the upload failed: {exc}. "
+            "Delete it in Robopack, since the API cannot delete packages."
+        ) from exc
+
+    state, package = None, {}
+    deadline = max_wait_seconds
+    while True:
+        package = await client().get_json(f"package/{package_id}")
+        state = package.get("state")
+        if state in ("Completed", "Error") or deadline <= 0:
+            break
+        await asyncio.sleep(10)
+        deadline -= 10
+    return {
+        "package_id": package_id,
+        "state": state,
+        "issues": package.get("issues"),
+        "bytes": size,
+        "chunks_uploaded": chunks,
+    }
+
+
+# ---------------------------------------------------------------- flows and deployments
+
+_SCOPE_VALUES = {"Machine": 1, "User": 2, "Any": 4}
+
+
+@mcp.tool()
+async def robopack_list_flows(page: int | None = None, items_per_page: int | None = None) -> Any:
+    """List deployment flows (patch flows and manual flows)."""
+    return await client().get_json("flow", params=_paging(page, items_per_page))
+
+
+@mcp.tool()
+async def robopack_get_flow(flow_id: str) -> Any:
+    """Get a deployment flow with its deployments."""
+    return await client().get_json(f"flow/{flow_id}")
+
+
+@mcp.tool()
+async def robopack_create_flow(
+    package_id: str | None = None,
+    app_id: str | None = None,
+    name: str | None = None,
+    scope: Literal["Machine", "User", "Any"] | None = None,
+    flags: int | None = None,
+    patch_group_id: str | None = None,
+    template_id: str | None = None,
+    supersedence_history_count: int | None = None,
+    confirm: bool = False,
+) -> Any:
+    """Create a deployment flow from a package or an Instant app. Give exactly one of package_id or app_id.
+
+    `flags` is the AppRegistrationFlags bitmask. For example, 1 = Automatic (patch flow),
+    128 = UploadMsixAsWin32. `patch_group_id` adds the flow to an existing patch group.
+    """
+    if bool(package_id) == bool(app_id):
+        raise ValueError("Give exactly one of package_id or app_id")
+    if supersedence_history_count is not None and not 0 <= supersedence_history_count <= 8:
+        raise ValueError("supersedence_history_count must be between 0 and 8")
+    body = {
+        "packageId": package_id,
+        "appId": app_id,
+        "name": name,
+        "scope": _SCOPE_VALUES[scope] if scope else None,
+        "flags": flags,
+        "patchGroupId": patch_group_id,
+        "templateId": template_id,
+        "supersedenceHistoryCount": supersedence_history_count,
+    }
+    body = {k: v for k, v in body.items() if v is not None}
+    if not confirm:
+        return _preview("create_flow", body)
+    return await client().post_json("flow/create", body)
+
+
+@mcp.tool()
+async def robopack_add_deployment(
+    flow_id: str,
+    package_id: str,
+    version: str | None = None,
+    start_now: bool = False,
+    confirm: bool = False,
+) -> Any:
+    """Add a deployment (a package version) to an existing flow. `version` overrides the package version."""
+    body: dict[str, Any] = {"packageId": package_id, "startNow": start_now}
+    if version:
+        body["version"] = version
+    if not confirm:
+        return _preview("add_deployment", {"flow_id": flow_id, **body})
+    return await client().post_json(f"flow/{flow_id}/add-deployment", body)
+
+
+@mcp.tool()
+async def robopack_get_deployment(deployment_id: str) -> Any:
+    """Get a deployment's details and status."""
+    return await client().get_json(f"flow/deployment/{deployment_id}")
+
+
+@mcp.tool()
+async def robopack_get_wave(wave_id: str) -> Any:
+    """Get a deployment wave, including its group targets (read-only)."""
+    return await client().get_json(f"flow/wave/{wave_id}")
+
+
+@mcp.tool()
+async def robopack_get_wave_live(wave_id: str) -> Any:
+    """Get live deployment data for a wave, such as targeted devices and results (read-only)."""
+    return await client().get_json(f"flow/wave/{wave_id}/live")
+
+
+@mcp.tool()
+async def robopack_start_deployment(deployment_id: str, confirm: bool = False) -> Any:
+    """Start a deployment, which pushes its app to the tenant's assigned groups."""
+    if not confirm:
+        return _preview("start_deployment", {"deployment_id": deployment_id})
+    return await client().post_json(f"flow/deployment/{deployment_id}/start")
+
+
+@mcp.tool()
+async def robopack_stop_deployment(deployment_id: str, confirm: bool = False) -> Any:
+    """Stop a running deployment."""
+    if not confirm:
+        return _preview("stop_deployment", {"deployment_id": deployment_id})
+    return await client().post_json(f"flow/deployment/{deployment_id}/stop")
+
+
+@mcp.tool()
+async def robopack_update_deployment_content(deployment_id: str, confirm: bool = False) -> Any:
+    """Update a deployment's app content from its package."""
+    if not confirm:
+        return _preview("update_deployment_content", {"deployment_id": deployment_id})
+    return await client().post_json(f"flow/deployment/{deployment_id}/update-content")
 
 
 # ---------------------------------------------------------------- tenants
