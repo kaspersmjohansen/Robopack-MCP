@@ -267,3 +267,14 @@ def test_wave_tools_are_read_only_and_use_expected_paths(monkeypatch):
     run(server.robopack_get_wave("w-1"))
     run(server.robopack_get_wave_live("w-1"))
     assert fake.calls == [("get", "flow/wave/w-1"), ("get", "flow/wave/w-1/live")]
+
+
+def test_create_flow_flags_must_be_schema_values(monkeypatch):
+    fake = _RecordingClient()
+    monkeypatch.setattr(server, "client", lambda: fake)
+    run(server.robopack_create_flow(package_id="p-1", flags=32768, confirm=True))
+    assert fake.calls[-1][2]["flags"] == 32768
+    with pytest.raises(ValueError):
+        run(server.robopack_create_flow(package_id="p-1", flags=3, confirm=True))
+    with pytest.raises(ValueError):
+        run(server.robopack_create_flow(package_id="p-1", flags=65536, confirm=True))

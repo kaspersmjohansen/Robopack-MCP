@@ -328,6 +328,8 @@ async def robopack_create_custom_package(
 # ---------------------------------------------------------------- flows and deployments
 
 _SCOPE_VALUES = {"Machine": 1, "User": 2, "Any": 4}
+# Values allowed by the POST /v1/flow/create schema. Combined bitmasks are not listed there.
+_FLOW_FLAG_VALUES = {0} | {1 << n for n in range(16)}  # 0, 1, 2, ..., 32768
 
 
 @mcp.tool()
@@ -363,6 +365,8 @@ async def robopack_create_flow(
         raise ValueError("Give exactly one of package_id or app_id")
     if supersedence_history_count is not None and not 0 <= supersedence_history_count <= 8:
         raise ValueError("supersedence_history_count must be between 0 and 8")
+    if flags is not None and flags not in _FLOW_FLAG_VALUES:
+        raise ValueError(f"flags must be one of the schema values: {sorted(_FLOW_FLAG_VALUES)}")
     body = {
         "packageId": package_id,
         "appId": app_id,
