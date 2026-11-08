@@ -51,8 +51,21 @@ def test_tenant_upload_sends_package_id_as_query_param(monkeypatch):
     monkeypatch.setattr(server, "client", lambda: FakeClient())
     run(server.robopack_upload_to_tenant("t-1", "p-1", confirm=True))
     assert seen["path"] == "tenant/t-1/upload"
-    assert seen["params"] == {"packageId": "p-1"}
-    assert "packageId" not in seen["body"]
+    assert seen["params"] == {"packageId": "p-1", "wait": False, "uploadMsixAsWin32": True}
+    assert seen["body"] is None
+
+
+def test_tenant_upload_false_flag_is_sent_as_query_param(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        async def post_json(self, path, body=None, **kwargs):
+            seen["params"] = kwargs.get("params")
+            return {"id": "u-1", "state": "Pending"}
+
+    monkeypatch.setattr(server, "client", lambda: FakeClient())
+    run(server.robopack_upload_to_tenant("t-1", "p-1", upload_msix_as_win32=False, confirm=True))
+    assert seen["params"]["uploadMsixAsWin32"] is False
 
 
 def test_import_sends_scope_and_version_as_query_params(monkeypatch):

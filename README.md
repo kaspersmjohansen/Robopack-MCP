@@ -72,7 +72,15 @@ Tools marked **yes** return a preview unless called with `confirm=true`.
 These come from the public v1 article, not from the in-app docs:
 
 - **App search filter names.** `robopack_search_apps` forwards `filters` as-is. The article does not list the keys.
-- **Upload parameters.** The client sends the whole file as the request body with `index` and `size` query parameters, where `size` is the file size in bytes. Confirm this, and add chunked upload if files are large.
+- **Upload parameters.** The client sends the whole file as the request body with `index` and `size` query parameters, where `size` is the file size in bytes. A 296 MB MSIX (`Claude.msix`) uploaded this way and completed with no issues on 2026-11-08 (package `1640d031-4c27-4b9a-fb2b-08df3d5b6c2e`). Robopack's docs do not describe `index` or `size` for chunked uploads, so chunked upload is not implemented.
 - **Download formats.** The tool passes the format through, so check which values each package type accepts.
 - **Rate limits and error codes.** The article does not document them. The client retries 429 and GET 5xx with backoff, and never retries POST on 5xx.
 - **Paging.** Paging is 1-based on the live API, even though the article says 0-indexed. `Page=0` returns HTTP 500, so the server clamps it to 1. Paging info comes back in the `X-Pagination` header. Tools return only the body, so add header passthrough if you need page counts.
+
+## Open issues
+
+- **Tenant upload flags were sent in the wrong place (fixed, uncommitted, verified live).** `uploadMsixAsWin32` and `wait` are query parameters on `POST /v1/tenant/{id}/upload`. The server had sent them in the JSON body, where the API ignores them, so every earlier `upload_msix_as_win32=False` test actually ran with `True`. After the fix, `uploadMsixAsWin32=False` on the repository package `Claude 1.5354.0` (`aa470342-a46b-4259-b08f-08dea9e68ed7`) creates an MSIX app in Intune (verified in the Intune portal, 2026-11-07). The same package with `True` creates a Win32 app.
+- **Custom MSIX uploads fail with `IntuneUploadFailed` with both `True` and `False`.** Custom MSIX packages (`Hygrosoft 1.0.5.26100`, `1b906906-a0c2-417b-16a9-08df3c5fad3f`, and `Claude 4.23118.0.0`, `7e9b7967-0d8f-4e8f-16ac-08df3c5fad3f`) failed with `True`. A new Hygrosoft package created through the API (`3fd4819b-53b7-482f-16b0-08df3c5fad3f`, source 4, `isCustom` true) also failed with `False` on 2026-11-07. Those packages have no detection rules. The web app's "Import to Intune" works for the same MSIX files. Ask Robopack support whether the API should set the MSIX detection rule itself.
+- **Follow-up test: custom MSIX with `uploadMsixAsWin32=False`, Claude 4.23118.0.0** (`7e9b7967-0d8f-4e8f-16ac-08df3c5fad3f`). Not tested yet. Hygrosoft already failed with `False`.
+- **Brave 153 and 155 version imports fail with access denied** (`InstallFailed`, exit code `-2147024891`). Ask Robopack support.
+- **Tenant upload has no wrapping option.** Probing `noScriptWrap` and `templateId` on the upload endpoint returned no validation error, so the API does not accept them there. IntuneWin downloads do accept `noScriptWrap` and `templateId`.

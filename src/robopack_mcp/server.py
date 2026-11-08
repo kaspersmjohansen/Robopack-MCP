@@ -263,14 +263,13 @@ async def robopack_upload_to_tenant(
     With wait=True a failed upload returns HTTP 400. Poll
     robopack_get_tenant_upload_status until the state is Completed, Error or Canceled.
     """
-    # The live API rejects packageId in the JSON body ("packageId field is required")
-    # and accepts it as a query parameter, so it is sent that way.
-    body = {"wait": wait, "uploadMsixAsWin32": upload_msix_as_win32}
+    # The live API reads packageId, wait and uploadMsixAsWin32 from the query string.
+    # In the JSON body they are ignored: packageId is rejected as missing, and
+    # uploadMsixAsWin32=False silently falls back to True.
+    params = {"packageId": package_id, "wait": wait, "uploadMsixAsWin32": upload_msix_as_win32}
     if not confirm:
-        return _preview("upload_to_tenant", {"tenant_id": tenant_id, "packageId": package_id, **body})
-    return await client().post_json(
-        f"tenant/{tenant_id}/upload", body, params={"packageId": package_id}
-    )
+        return _preview("upload_to_tenant", {"tenant_id": tenant_id, **params})
+    return await client().post_json(f"tenant/{tenant_id}/upload", None, params=params)
 
 
 @mcp.tool()
