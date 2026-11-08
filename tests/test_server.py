@@ -108,3 +108,28 @@ def test_upload_reads_only_from_upload_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("ROBOPACK_UPLOAD_DIR", str(tmp_path))
     with pytest.raises(ValueError):
         run(server.robopack_upload_package_file("p-1", "../secret.txt"))
+
+
+def test_chunked_upload_sends_offset_and_chunk_numbers(monkeypatch, tmp_path):
+    base = tmp_path / "uploads"
+    base.mkdir()
+    (base / "big.msix").write_bytes(b"0123456789" * 5)  # 50 bytes
+    monkeypatch.setenv("ROBOPACK_UPLOAD_DIR", str(base))
+
+    calls = []
+
+    class FakeClient:
+        async def post_json(self, path, body=None, **kwargs):
+            calls.append((path, kwargs["params"], kwargs["content"]))
+            return None
+
+    monkeypatch.setattr(server, "client", lambda: FakeClient())
+    result = run(server.robopack_upload_package_file("p-1", "big.msix", chunk_bytes=20, confirm=True))
+
+    assert result == {"file": "big.msix", "bytes": 50, "chunks_uploaded": 3}
+    assert [c[1] for c in calls] == [
+        {"index": 0, "size": 20, "offset": 0, "chunk": 0},
+        {"index": 0, "size": 20, "offset": 20, "chunk": 1},
+        {"index": 0, "size": 10, "offset": 40, "chunk": 2},
+    ]
+    assert b"".join(c[2] for c in calls) == (base / "big.msix").read_bytes()

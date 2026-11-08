@@ -198,26 +198,38 @@ async def robopack_upload_package_file(
     package_id: str,
     file_name: str,
     index: int = 0,
+    chunk_bytes: int | None = None,
     confirm: bool = False,
 ) -> Any:
     """Upload a file from ROBOPACK_UPLOAD_DIR into a package in WaitingForContent state.
 
-    Uploads the whole file in one request. Chunked upload is not implemented yet.
-    Call robopack_finalize_package afterwards with the same file names, sizes and order.
+    Without chunk_bytes the whole file goes in one request. With chunk_bytes the file is
+    sent in pieces of that size: `size` is the piece size, `offset` is the byte position
+    in the file, and `chunk` is the piece number. Call robopack_finalize_package afterwards
+    with the same file names, sizes and order.
     """
     base = _sandbox("ROBOPACK_UPLOAD_DIR", "robopack-uploads")
     path = _safe_path(file_name, base, must_exist=True)
     size = path.stat().st_size
-    details = {"package_id": package_id, "file": path.name, "bytes": size, "index": index}
+    piece = chunk_bytes or size
+    if piece <= 0:
+        raise ValueError("chunk_bytes must be positive")
+    chunks = max(1, -(-size // piece))
+    details = {"package_id": package_id, "file": path.name, "bytes": size,
+               "index": index, "chunk_bytes": piece, "chunks": chunks}
     if not confirm:
         return _preview("upload_package_file", details)
-    data = path.read_bytes()
-    return await client().post_json(
-        f"package/content/{package_id}",
-        content=data,
-        params={"index": index, "size": size},
-        headers={"Content-Type": "application/octet-stream"},
-    )
+    with path.open("rb") as f:
+        for n in range(chunks):
+            offset = n * piece
+            data = f.read(piece)
+            await client().post_json(
+                f"package/content/{package_id}",
+                content=data,
+                params={"index": index, "size": len(data), "offset": offset, "chunk": n},
+                headers={"Content-Type": "application/octet-stream"},
+            )
+    return {"file": path.name, "bytes": size, "chunks_uploaded": chunks}
 
 
 @mcp.tool()
