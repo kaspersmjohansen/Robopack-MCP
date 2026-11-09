@@ -6,7 +6,7 @@ This is an independent project. It is not affiliated with, endorsed by or suppor
 
 ## Quick start with uvx (no clone)
 
-[`uvx`](https://docs.astral.sh/uv/) is part of `uv`. It downloads, builds and runs the server on demand, in its own environment, the same way `npx` runs Node packages. You do not clone the repository or create a virtual environment.
+[`uvx`](https://docs.astral.sh/uv/) is part of `uv`. It downloads the server from PyPI and runs it on demand, in its own environment, the same way `npx` runs Node packages. You do not clone the repository or create a virtual environment.
 
 **1. Install uv.** On Windows: `winget install -e --id astral-sh.uv`. On macOS: `brew install uv`. On any system with Python: `pipx install uv`. Open a new terminal afterwards, and restart Claude Desktop later so it sees `uvx` on the PATH. Check it with `uvx --version`.
 
@@ -17,7 +17,7 @@ This is an independent project. It is not affiliated with, endorsed by or suppor
   "mcpServers": {
     "robopack": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/kaspersmjohansen/Robopack-MCP", "robopack-mcp"],
+      "args": ["robopack-mcp@latest"],
       "env": {
         "ROBOPACK_API_KEY": "your-key",
         "ROBOPACK_ENV": "prod",
@@ -33,10 +33,9 @@ This is an independent project. It is not affiliated with, endorsed by or suppor
 
 Notes:
 
-- The first start downloads and builds the package, so it takes longer than later starts.
-- Git has to be able to read the repository. If it is private, Git must be signed in to a GitHub account with access, and that is unreliable when Claude Desktop starts the server. Use the clone-and-install steps below instead.
-- `uvx` caches the build. To get a newer version, run `uv cache clean robopack-mcp` and restart Claude Desktop.
-- To stay on one version, add a tag or commit to the URL, for example `git+https://github.com/kaspersmjohansen/Robopack-MCP@<tag-or-commit>`.
+- The first start downloads the package, so it takes longer than later starts.
+- `@latest` makes `uvx` check for the newest release each time it starts. To stay on one version, pin it, for example `robopack-mcp==0.1.0`.
+- To run unreleased code straight from GitHub, use `"args": ["--from", "git+https://github.com/kaspersmjohansen/Robopack-MCP", "robopack-mcp"]`. Git must be able to read the repository for that form.
 
 ## Install on Windows
 
