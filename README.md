@@ -4,6 +4,18 @@ An unofficial MCP server that exposes the Robopack v1 API (Intune app packaging)
 
 This is an independent project. It is not affiliated with, endorsed by or supported by Robopack.
 
+## Status and known limitations
+
+This is an early release (0.1.0). It was tested live against the production API of one tenant. The test environment (`ROBOPACK_ENV=test`) has not been tried.
+
+- **Not tested live:** the flow, deployment and wave tools, and Inno Setup, NSIS and Advanced Installer detection. They are covered by unit tests only. See [Not tested live](#not-tested-live).
+- **Custom MSIX packages cannot be uploaded to Intune** through the API. Repository MSIX packages work.
+- **Intune group assignment cannot be set** through the API. Create the patch group in the Robopack web UI and create flows against it with the tools.
+- **EXE packages need silent install switches.** API-created packages do not get Robopack's analyzer, so the tool detects the switches for known installer types and asks for them otherwise.
+- **App-V downloads are untested.**
+
+These come from the Robopack API itself and are listed in [Follow-ups for Robopack support](#follow-ups-for-robopack-support). Please report anything else you find through the [issue tracker](https://github.com/kaspersmjohansen/Robopack-MCP/issues).
+
 ## Quick start with uvx (no clone)
 
 [`uvx`](https://docs.astral.sh/uv/) is part of `uv`. It downloads the server from PyPI and runs it on demand, in its own environment, the same way `npx` runs Node packages. You do not clone the repository or create a virtual environment.
