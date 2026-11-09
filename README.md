@@ -60,7 +60,7 @@ Example Claude Desktop config (`claude_desktop_config.json`):
 | `robopack_create_package` | **yes** | Create a blank package |
 | `robopack_upload_package_file` | **yes** | Upload a file into a package |
 | `robopack_finalize_package` | **yes** | Finalize uploaded content |
-| `robopack_create_custom_package` | **yes** | Create an MSI or EXE package from a file in the upload dir in one step (create, upload, finalize, wait for Completed or Error). MSIX not supported yet. |
+| `robopack_create_custom_package` | **yes** | Create an MSI or EXE package from a file in the upload dir in one step (create, upload, finalize, wait for Completed or Error). EXE packages need `install_command` with silent switches, because the analyzer runs only in the web UI. Uninstall is optional. For EXE files, publisher and version are read from the version resource (`CompanyName`, `ProductVersion`) unless given explicitly. MSIX not supported yet. |
 | `robopack_list_flows` / `robopack_get_flow` / `robopack_get_deployment` / `robopack_get_wave` / `robopack_get_wave_live` | no | Deployment flows, deployments, waves and their status |
 | `robopack_create_flow` | **yes** | Create a flow (patch flow with `flags=1`) from a package or Instant app, optionally into a patch group |
 | `robopack_add_deployment` | **yes** | Add a package version to a flow, optionally start it |

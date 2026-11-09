@@ -249,6 +249,29 @@ async def robopack_finalize_package(
     return await client().post_json(f"package/content/{package_id}/finalize", body)
 
 
+def _exe_version_info(path: Path) -> dict[str, str]:
+    """Read the StringFileInfo block (CompanyName, ProductVersion, ...) from a Windows EXE."""
+    import pefile  # only needed for EXE packages
+
+    info: dict[str, str] = {}
+    try:
+        pe = pefile.PE(str(path), fast_load=True)
+    except pefile.PEFormatError:
+        return info  # not a valid Windows executable, so there is no metadata to read
+    with pe:
+        try:
+            pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]])
+        except Exception:
+            return info
+        for file_info in getattr(pe, "FileInfo", None) or []:
+            for entry in file_info:
+                if entry.Key == b"StringFileInfo":
+                    for table in entry.StringTable:
+                        for key, value in table.entries.items():
+                            info[key.decode(errors="replace")] = value.decode(errors="replace").strip()
+    return info
+
+
 @mcp.tool()
 async def robopack_create_custom_package(
     file_name: str,
@@ -271,6 +294,9 @@ async def robopack_create_custom_package(
     """
     if Path(file_name).suffix.lower() != f".{source_type}":
         raise ValueError(f"file_name must end in .{source_type} for source_type {source_type}")
+    if source_type == "exe" and not install_command:
+        # Robopack's analyzer runs only in the web UI, so the silent install command must be given here.
+        raise ValueError("EXE packages need install_command with the silent install switches")
     base = _sandbox("ROBOPACK_UPLOAD_DIR", "robopack-uploads")
     path = _safe_path(file_name, base, must_exist=True)
     size = path.stat().st_size
@@ -278,6 +304,11 @@ async def robopack_create_custom_package(
     if piece <= 0:
         raise ValueError("chunk_bytes must be positive")
     chunks = max(1, -(-size // piece))
+    if source_type == "exe":
+        # Fill in publisher and version from the EXE's version resource, unless given explicitly.
+        exe_info = _exe_version_info(path)
+        publisher = publisher or exe_info.get("CompanyName") or None
+        version = version or exe_info.get("ProductVersion") or exe_info.get("FileVersion") or None
     details = {
         "name": name, "source_type": source_type, "file": path.name, "bytes": size,
         "chunks": chunks, "publisher": publisher, "version": version,

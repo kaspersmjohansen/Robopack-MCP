@@ -278,3 +278,42 @@ def test_create_flow_flags_must_be_schema_values(monkeypatch):
         run(server.robopack_create_flow(package_id="p-1", flags=3, confirm=True))
     with pytest.raises(ValueError):
         run(server.robopack_create_flow(package_id="p-1", flags=65536, confirm=True))
+
+
+def test_exe_requires_install_command(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "Setup.exe", b"x" * 10)
+
+    def boom():
+        raise AssertionError("client must not be called when install_command is missing")
+
+    monkeypatch.setattr(server, "client", boom)
+    with pytest.raises(ValueError):
+        run(server.robopack_create_custom_package("Setup.exe", "App", "exe", confirm=True))
+
+
+def test_exe_keeps_explicit_install_command(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "Setup.exe", b"x" * 10)
+    result = run(server.robopack_create_custom_package(
+        "Setup.exe", "App", "exe", install_command="Setup.exe /S"))
+    assert result["details"]["install_command"] == "Setup.exe /S"
+
+
+def test_exe_publisher_and_version_come_from_file_metadata(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "Setup.exe", b"x" * 10)
+    monkeypatch.setattr(server, "_exe_version_info",
+                        lambda p: {"CompanyName": "Contoso Ltd", "ProductVersion": "3.2.1", "FileVersion": "3.2.0.0"})
+    result = run(server.robopack_create_custom_package(
+        "Setup.exe", "App", "exe", install_command="Setup.exe /quiet"))
+    assert result["details"]["publisher"] == "Contoso Ltd"
+    assert result["details"]["version"] == "3.2.1"
+
+
+def test_exe_explicit_publisher_and_version_win_over_metadata(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "Setup.exe", b"x" * 10)
+    monkeypatch.setattr(server, "_exe_version_info",
+                        lambda p: {"CompanyName": "Contoso Ltd", "ProductVersion": "3.2.1"})
+    result = run(server.robopack_create_custom_package(
+        "Setup.exe", "App", "exe", publisher="Fabrikam", version="9.9",
+        install_command="Setup.exe /quiet"))
+    assert result["details"]["publisher"] == "Fabrikam"
+    assert result["details"]["version"] == "9.9"
