@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import mmap
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -249,6 +250,45 @@ async def robopack_finalize_package(
     return await client().post_json(f"package/content/{package_id}/finalize", body)
 
 
+# Signature (bytes found inside the EXE) -> installer type and its usual silent switches.
+_INSTALLER_SIGNATURES: list[tuple[bytes, str, str]] = [
+    (b"Inno Setup Setup Data", "Inno Setup", "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-"),
+    (b"Nullsoft Install System", "NSIS", "/S"),
+    (b"NullsoftInst", "NSIS", "/S"),
+    (b"Advanced Installer", "Advanced Installer", "/exenoui /qn /norestart"),
+]
+
+
+def _detect_installer(path: Path, sibling_names: list[str] | None = None) -> dict[str, str | None] | None:
+    """Identify the installer type of an EXE and its silent switches, or None if unknown.
+
+    `switches` is None when the type is recognised but its silent install needs more
+    information, such as an InstallShield InstallScript setup that needs a response file.
+    """
+    if path.stat().st_size == 0:
+        return None
+    with path.open("rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as data:
+        for marker, kind, switches in _INSTALLER_SIGNATURES:
+            if data.find(marker) != -1:
+                return {"type": kind, "switches": switches}
+        is_installshield = data.find(b"InstallShield") != -1
+
+    import pefile
+
+    try:
+        with pefile.PE(str(path), fast_load=True) as pe:
+            sections = {sec.Name.rstrip(b"\x00").decode(errors="replace") for sec in pe.sections}
+    except pefile.PEFormatError:
+        sections = set()
+    if ".wixburn" in sections:
+        return {"type": "WiX Burn bundle", "switches": "/quiet /norestart"}
+    if is_installshield:
+        has_msi = any(n.lower().endswith(".msi") for n in (sibling_names or []))
+        # A launcher with a neighbouring MSI takes the MSI switches after /v.
+        return {"type": "InstallShield", "switches": "/S /v/qn" if has_msi else None}
+    return None
+
+
 def _exe_version_info(path: Path) -> dict[str, str]:
     """Read the StringFileInfo block (CompanyName, ProductVersion, ...) from a Windows EXE."""
     import pefile  # only needed for EXE packages
@@ -273,6 +313,23 @@ def _exe_version_info(path: Path) -> dict[str, str]:
 
 
 @mcp.tool()
+async def robopack_detect_installer(file_name: str, additional_files: list[str] | None = None) -> Any:
+    """Detect the installer type of an EXE in ROBOPACK_UPLOAD_DIR and suggest silent install switches (read-only).
+
+    Returns the type and switches, or says they are unknown so the user can supply them.
+    """
+    base = _sandbox("ROBOPACK_UPLOAD_DIR", "robopack-uploads")
+    path = _safe_path(file_name, base, must_exist=True)
+    detected = _detect_installer(path, additional_files or [])
+    if detected is None:
+        return {"file": path.name, "installer_type": None, "silent_switches": None,
+                "note": "Installer type not recognised. Ask the user for the silent install parameters."}
+    return {"file": path.name, "installer_type": detected["type"], "silent_switches": detected["switches"],
+            "note": None if detected["switches"] else
+            "Type recognised, but the silent switches depend on how it was built. Ask the user."}
+
+
+@mcp.tool()
 async def robopack_create_custom_package(
     file_name: str,
     name: str,
@@ -284,35 +341,65 @@ async def robopack_create_custom_package(
     user_context: str | None = None,
     detection_rules: list[dict[str, Any]] | None = None,
     chunk_bytes: int | None = None,
+    additional_files: list[str] | None = None,
     max_wait_seconds: int = 600,
     confirm: bool = False,
 ) -> Any:
-    """Create a custom MSI or EXE package from a file in ROBOPACK_UPLOAD_DIR in one step.
+    """Create a custom MSI or EXE package from files in ROBOPACK_UPLOAD_DIR in one step.
 
     Runs create, upload, finalize, then waits until the package is Completed or Error.
-    The file name must end in the source type (.msi or .exe). MSIX is not supported yet.
+    `file_name` is the main installer and must end in the source type (.msi or .exe).
+    `additional_files` are uploaded with it, in the order given, after the main file.
+    MSIX is not supported yet.
+
+    For EXE files without install_command, the installer type (Inno Setup, NSIS, WiX Burn,
+    Advanced Installer, InstallShield with an MSI) is detected and its silent switches are
+    used. If the type is unknown, this raises an error: ask the user for the silent install
+    parameters and call again with install_command.
     """
     if Path(file_name).suffix.lower() != f".{source_type}":
         raise ValueError(f"file_name must end in .{source_type} for source_type {source_type}")
-    if source_type == "exe" and not install_command:
-        # Robopack's analyzer runs only in the web UI, so the silent install command must be given here.
-        raise ValueError("EXE packages need install_command with the silent install switches")
+    names = [file_name, *(additional_files or [])]
+    if len({n.lower() for n in names}) != len(names):
+        raise ValueError("Each file may only be listed once")
     base = _sandbox("ROBOPACK_UPLOAD_DIR", "robopack-uploads")
-    path = _safe_path(file_name, base, must_exist=True)
-    size = path.stat().st_size
-    piece = chunk_bytes or size
-    if piece <= 0:
+    paths = [_safe_path(n, base, must_exist=True) for n in names]
+    path = paths[0]
+    install_command_source = "given" if install_command else None
+    if source_type == "exe" and not install_command:
+        # Robopack's analyzer runs only in the web UI, so work out the silent install command here.
+        detected = _detect_installer(path, names[1:])
+        if detected and detected["switches"]:
+            exe = f'"{path.name}"' if " " in path.name else path.name
+            install_command = f'{exe} {detected["switches"]}'
+            install_command_source = f'detected {detected["type"]}'
+        elif detected:
+            raise ValueError(
+                f"{path.name} looks like an {detected['type']} installer, but its silent switches "
+                "depend on how it was built (for example a response file). "
+                "Ask the user for install_command with the silent install parameters."
+            )
+        else:
+            raise ValueError(
+                f"The installer type of {path.name} could not be identified. "
+                "Ask the user for install_command with the silent install parameters."
+            )
+    size = sum(p.stat().st_size for p in paths)
+    piece = chunk_bytes
+    if piece is not None and piece <= 0:
         raise ValueError("chunk_bytes must be positive")
-    chunks = max(1, -(-size // piece))
+    chunks = sum(max(1, -(-p.stat().st_size // (piece or p.stat().st_size or 1))) for p in paths)
     if source_type == "exe":
         # Fill in publisher and version from the EXE's version resource, unless given explicitly.
         exe_info = _exe_version_info(path)
         publisher = publisher or exe_info.get("CompanyName") or None
         version = version or exe_info.get("ProductVersion") or exe_info.get("FileVersion") or None
     details = {
-        "name": name, "source_type": source_type, "file": path.name, "bytes": size,
+        "name": name, "source_type": source_type, "file": path.name,
+        "files": [p.name for p in paths], "bytes": size,
         "chunks": chunks, "publisher": publisher, "version": version,
-        "install_command": install_command, "uninstall_command": uninstall_command,
+        "install_command": install_command, "install_command_source": install_command_source,
+        "uninstall_command": uninstall_command,
         "user_context": user_context, "detection_rules": detection_rules,
     }
     if not confirm:
@@ -325,12 +412,15 @@ async def robopack_create_custom_package(
     )
     package_id = created["id"]
     try:
-        await robopack_upload_package_file(
-            package_id, path.name, index=0,
-            chunk_bytes=chunk_bytes, confirm=True,
-        )
+        for index, p in enumerate(paths):
+            await robopack_upload_package_file(
+                package_id, p.name, index=index,
+                chunk_bytes=chunk_bytes, confirm=True,
+            )
         await robopack_finalize_package(
-            package_id, [{"fileName": path.name, "fileSize": size}], confirm=True,
+            package_id,
+            [{"fileName": p.name, "fileSize": p.stat().st_size} for p in paths],
+            confirm=True,
         )
     except Exception as exc:
         raise RuntimeError(
@@ -351,6 +441,9 @@ async def robopack_create_custom_package(
         "package_id": package_id,
         "state": state,
         "issues": package.get("issues"),
+        "install_command": install_command,
+        "install_command_source": install_command_source,
+        "files": [p.name for p in paths],
         "bytes": size,
         "chunks_uploaded": chunks,
     }

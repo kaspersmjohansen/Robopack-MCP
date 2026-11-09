@@ -184,7 +184,8 @@ def test_custom_package_runs_create_upload_finalize_then_waits(monkeypatch, tmp_
     ))
 
     assert result == {"package_id": "pkg-9", "state": "Completed", "issues": [],
-                      "bytes": 30, "chunks_uploaded": 3}
+                      "install_command": "setup.exe /S", "install_command_source": "given",
+                      "files": ["app.exe"], "bytes": 30, "chunks_uploaded": 3}
     assert calls[0][:3] == ("post", "package/create", {
         "name": "My App", "sourceType": "exe", "publisher": "Contoso", "version": "1.2.3",
         "installCommand": "setup.exe /S", "uninstallCommand": "uninstall.exe /S",
@@ -317,3 +318,90 @@ def test_exe_explicit_publisher_and_version_win_over_metadata(monkeypatch, tmp_p
         install_command="Setup.exe /quiet"))
     assert result["details"]["publisher"] == "Fabrikam"
     assert result["details"]["version"] == "9.9"
+
+
+def test_custom_package_uploads_additional_files_in_order(monkeypatch, tmp_path):
+    base = _upload_dir(monkeypatch, tmp_path, "setup.exe", b"a" * 10)
+    (base / "data.cab").write_bytes(b"b" * 25)
+    (base / "Setup.ini").write_bytes(b"c" * 5)
+    calls = []
+
+    class FakeClient:
+        async def post_json(self, path, body=None, **kwargs):
+            calls.append((path, body, kwargs.get("params")))
+            return {"id": "pkg-3"} if path == "package/create" else None
+
+        async def get_json(self, path):
+            return {"state": "Completed", "issues": []}
+
+    monkeypatch.setattr(server, "client", lambda: FakeClient())
+    result = run(server.robopack_create_custom_package(
+        "setup.exe", "App", "exe", install_command="setup.exe /S",
+        additional_files=["data.cab", "Setup.ini"], confirm=True))
+
+    uploads = [c for c in calls if c[0] == "package/content/pkg-3"]
+    assert [(u[2]["index"], u[2]["size"]) for u in uploads] == [(0, 10), (1, 25), (2, 5)]
+    assert calls[-1] == ("package/content/pkg-3/finalize", {"files": [
+        {"fileName": "setup.exe", "fileSize": 10},
+        {"fileName": "data.cab", "fileSize": 25},
+        {"fileName": "Setup.ini", "fileSize": 5},
+    ]}, None)
+    assert result["files"] == ["setup.exe", "data.cab", "Setup.ini"]
+    assert result["bytes"] == 40
+
+
+def test_custom_package_rejects_duplicate_files(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "setup.exe", b"a")
+    with pytest.raises(ValueError):
+        run(server.robopack_create_custom_package(
+            "setup.exe", "App", "exe", install_command="setup.exe /S",
+            additional_files=["SETUP.EXE"], confirm=True))
+
+
+def test_exe_install_command_is_detected_from_installer_type(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "Setup App.exe", b"MZ" + b"\0" * 40 + b"Inno Setup Setup Data (6.2.0)")
+    result = run(server.robopack_create_custom_package("Setup App.exe", "App", "exe"))
+    assert result["status"] == "not_executed"
+    assert result["details"]["install_command"] == '"Setup App.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-'
+    assert result["details"]["install_command_source"] == "detected Inno Setup"
+
+
+def test_nsis_is_detected(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "inst.exe", b"MZ" + b"\0" * 40 + b"Nullsoft Install System v3.08")
+    result = run(server.robopack_create_custom_package("inst.exe", "App", "exe"))
+    assert result["details"]["install_command"] == "inst.exe /S"
+
+
+def test_unknown_installer_asks_for_manual_parameters(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "mystery.exe", b"MZ" + b"\0" * 100)
+
+    def boom():
+        raise AssertionError("client must not be called when the installer type is unknown")
+
+    monkeypatch.setattr(server, "client", boom)
+    with pytest.raises(ValueError, match="Ask the user for install_command"):
+        run(server.robopack_create_custom_package("mystery.exe", "App", "exe", confirm=True))
+
+
+def test_installshield_needs_msi_for_detected_switches(monkeypatch, tmp_path):
+    base = _upload_dir(monkeypatch, tmp_path, "setup.exe", b"MZ" + b"\0" * 40 + b"InstallShield Setup Launcher")
+    (base / "App.msi").write_bytes(b"x")
+    with_msi = run(server.robopack_create_custom_package(
+        "setup.exe", "App", "exe", additional_files=["App.msi"]))
+    assert with_msi["details"]["install_command"] == "setup.exe /S /v/qn"
+    assert with_msi["details"]["install_command_source"] == "detected InstallShield"
+    with pytest.raises(ValueError, match="response file"):
+        run(server.robopack_create_custom_package("setup.exe", "App", "exe"))
+
+
+def test_explicit_install_command_is_not_overridden_by_detection(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "inst.exe", b"MZ" + b"\0" * 40 + b"Nullsoft Install System v3.08")
+    result = run(server.robopack_create_custom_package("inst.exe", "App", "exe", install_command="inst.exe /silent"))
+    assert result["details"]["install_command"] == "inst.exe /silent"
+    assert result["details"]["install_command_source"] == "given"
+
+
+def test_detect_installer_tool_reports_unknown(monkeypatch, tmp_path):
+    _upload_dir(monkeypatch, tmp_path, "mystery.exe", b"MZ" + b"\0" * 100)
+    result = run(server.robopack_detect_installer("mystery.exe"))
+    assert result["installer_type"] is None and "Ask the user" in result["note"]
