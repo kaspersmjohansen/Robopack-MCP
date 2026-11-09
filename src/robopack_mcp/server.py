@@ -11,7 +11,6 @@ ROBOPACK_DOWNLOAD_DIR (writes).
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import mmap
 import os
 from pathlib import Path
@@ -301,7 +300,7 @@ def _exe_version_info(path: Path) -> dict[str, str]:
     with pe:
         try:
             pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]])
-        except Exception:
+        except Exception:  # noqa: BLE001 - malformed resource data just means no metadata
             return info
         for file_info in getattr(pe, "FileInfo", None) or []:
             for entry in file_info:

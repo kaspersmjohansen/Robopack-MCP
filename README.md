@@ -108,6 +108,7 @@ All of this was checked against the live production API.
 - **Tenant upload has no wrapping option.** `noScriptWrap` and `templateId` are not accepted on the upload endpoint. Whether a package is wrapped is decided on the Robopack side.
 - **Rate limits.** 1,000 concurrent read-only GET requests to `tenant` all returned 200 in about 15 seconds, with no 429 and no `Retry-After` header. The client retries 429 and GET 5xx with backoff and never retries POST on 5xx. The 429 path is covered only by a mock test.
 - **Custom packages.** MSI, single-file EXE and an 11-file InstallShield setup (51 MB) all completed, and the multi-file source download held every file with matching sizes. The detected install commands and the metadata were checked in the web UI.
+- **Path safety.** The client refuses any API path segment that is not letters, digits and hyphens, so a malformed or hostile ID such as `../tenant` cannot redirect a call to another endpoint. File access is limited to the upload and download folders, and symlinks that point outside them are refused.
 - **No delete.** The API has no delete endpoint. Packages and Intune apps have to be removed by hand.
 
 ## Not tested live

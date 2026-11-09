@@ -121,7 +121,6 @@ def test_chunked_upload_sends_offset_and_chunk_numbers(monkeypatch, tmp_path):
     class FakeClient:
         async def post_json(self, path, body=None, **kwargs):
             calls.append((path, kwargs["params"], kwargs["content"]))
-            return None
 
     monkeypatch.setattr(server, "client", lambda: FakeClient())
     result = run(server.robopack_upload_package_file("p-1", "big.msix", chunk_bytes=20, confirm=True))

@@ -1,5 +1,4 @@
 import asyncio
-import json
 
 import httpx
 import pytest
@@ -81,3 +80,23 @@ def test_post_json_handles_empty_body():
         return httpx.Response(204)
 
     assert run(make_client(handler).post_json("package/content/x/finalize", {"files": []})) is None
+
+
+@pytest.mark.parametrize("path", ["package/../tenant", "flow/x/../../tenant", "package/a b", "package/a?b=1", "package//x"])
+def test_unsafe_path_segments_are_refused_without_a_request(path):
+    def handler(request):
+        raise AssertionError("no request may be sent for an unsafe path")
+
+    with pytest.raises(ValueError, match="Invalid API path segment"):
+        run(make_client(handler).get_json(path))
+
+
+def test_uuid_paths_are_accepted():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={})
+
+    run(make_client(handler).get_json("flow/deployment/1a1bb30b-de50-4000-8e43-987b56413080/update-content"))
+    assert seen["path"] == "/v1/flow/deployment/1a1bb30b-de50-4000-8e43-987b56413080/update-content"

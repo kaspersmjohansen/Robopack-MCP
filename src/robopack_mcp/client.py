@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from typing import Any
 
 import httpx
@@ -18,6 +19,8 @@ BASE_URLS = {
 }
 
 RETRY_STATUSES = {429, 500, 502, 503, 504}
+# API paths are made of words and UUIDs. Anything else, such as '..', is refused.
+_SAFE_SEGMENT = re.compile(r"[A-Za-z0-9-]+")
 
 
 class RobopackError(Exception):
@@ -75,7 +78,7 @@ class RobopackClient:
         self._backoff_base = backoff_base
 
     @classmethod
-    def from_env(cls) -> "RobopackClient":
+    def from_env(cls) -> RobopackClient:
         return cls(
             os.environ.get("ROBOPACK_API_KEY", ""),
             os.environ.get("ROBOPACK_ENV", "test"),
@@ -98,6 +101,9 @@ class RobopackClient:
 
         POST is not retried on 5xx because a repeat could start a second import.
         """
+        for segment in path.strip("/").split("/"):
+            if not _SAFE_SEGMENT.fullmatch(segment):
+                raise ValueError(f"Invalid API path segment {segment!r}: IDs may only contain letters, digits and hyphens")
         clean_params = {k: v for k, v in (params or {}).items() if v is not None}
         resp: httpx.Response | None = None
         for attempt in range(self._max_retries + 1):
@@ -116,7 +122,8 @@ class RobopackClient:
                 break
             await asyncio.sleep(_retry_delay(resp, attempt, self._backoff_base))
 
-        assert resp is not None
+        if resp is None:  # unreachable: the loop always runs at least once
+            raise RuntimeError("No response received")
         if resp.status_code >= 400:
             raise RobopackError(resp.status_code, method, path, _error_message(resp))
         return resp
