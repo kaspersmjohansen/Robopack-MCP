@@ -2,17 +2,109 @@
 
 An MCP server that exposes the Robopack v1 API (Intune app packaging) as tools. It uses only the native Robopack API.
 
-## Setup
+## Install on Windows
 
-```bash
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-cp .env.example .env   # then add your key
+You need Python 3.10 or newer and Git. The steps use PowerShell and do not need administrator rights.
+
+**1. Install Python.** Either use winget:
+
+```powershell
+winget install -e --id Python.Python.3.12
 ```
 
-The server needs `mcp` 1.x (`mcp>=1.2.0,<2`). Version 2 renamed `FastMCP`.
+or download the installer from [python.org/downloads](https://www.python.org/downloads/) and tick **Add python.exe to PATH** on the first screen. Then open a **new** PowerShell window and check it:
 
-Environment variables:
+```powershell
+py -3 --version
+```
+
+This should print `Python 3.10` or newer. If `python` opens the Microsoft Store instead, use `py -3` as in the steps below, or turn off the `python.exe` entries under Settings → Apps → Advanced app settings → App execution aliases.
+
+**2. Install Git** if you do not have it: `winget install -e --id Git.Git`. Open a new PowerShell window afterwards.
+
+**3. Get the code.** The repository is private, so Git asks you to sign in to GitHub the first time.
+
+```powershell
+cd $HOME
+git clone https://github.com/kaspersmjohansen/Robopack-MCP.git
+cd Robopack-MCP
+```
+
+**4. Create the environment and install.** You do not need to activate the environment, which also avoids PowerShell's script execution policy.
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e .
+```
+
+This creates `.venv\Scripts\robopack-mcp.exe`, which is the program your MCP client starts.
+
+**5. Create the folders the server may use.** It only reads package files from the upload folder and only writes downloads to the download folder. Use absolute paths, because relative paths resolve against whatever folder the MCP client starts the server in.
+
+```powershell
+New-Item -ItemType Directory -Force C:\Robopack\uploads, C:\Robopack\downloads
+```
+
+**6. Add the server to Claude Desktop.** Open `%APPDATA%\Claude\claude_desktop_config.json` (or Settings → Developer → Edit Config) and add the server. Replace `YOUR-USER` and the key. Backslashes must be doubled in JSON.
+
+```json
+{
+  "mcpServers": {
+    "robopack": {
+      "command": "C:\\Users\\YOUR-USER\\Robopack-MCP\\.venv\\Scripts\\robopack-mcp.exe",
+      "env": {
+        "ROBOPACK_API_KEY": "your-key",
+        "ROBOPACK_ENV": "prod",
+        "ROBOPACK_UPLOAD_DIR": "C:\\Robopack\\uploads",
+        "ROBOPACK_DOWNLOAD_DIR": "C:\\Robopack\\downloads"
+      }
+    }
+  }
+}
+```
+
+The key sits in this file in plain text, so do not share or sync the file. Create the key in Robopack under Settings → API Integration. It is shown once.
+
+**7. Restart Claude Desktop** by quitting it from the system tray, not just closing the window, and start it again. Then ask Claude to list your Robopack tenants. If the call returns your tenant, the server works.
+
+**Update later:**
+
+```powershell
+cd $HOME\Robopack-MCP
+git pull
+.\.venv\Scripts\python.exe -m pip install -e .
+```
+
+### Troubleshooting on Windows
+
+| Symptom | Likely cause |
+|---|---|
+| The server does not appear in Claude Desktop | A typo in the JSON, or single backslashes in a path. Check the file is valid JSON and restart from the tray. |
+| The server shows as failed | The `command` path is wrong. Check that `robopack-mcp.exe` exists at that path. The logs are in `%APPDATA%\Claude\logs`. |
+| HTTP 401 from every call | Wrong key, or `ROBOPACK_ENV` does not match the key. A key made in production does not work with `test`. |
+| `No such file` or `Path must be inside` | The file is not inside `ROBOPACK_UPLOAD_DIR`, or the folder variable is a relative path. |
+| `pip` or `py` is not found | Python is not on your PATH. Reinstall it with **Add python.exe to PATH** ticked and open a new PowerShell window. |
+
+## Install on macOS or Linux
+
+You need Python 3.10 or newer and Git.
+
+```bash
+git clone https://github.com/kaspersmjohansen/Robopack-MCP.git
+cd Robopack-MCP
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+mkdir -p ~/robopack/uploads ~/robopack/downloads
+```
+
+Then add the server to your MCP client the same way as in step 6 above, with `command` set to the absolute path of `.venv/bin/robopack-mcp` and the folders set to absolute paths. On macOS the Claude Desktop config is `~/Library/Application Support/Claude/claude_desktop_config.json`.
+
+The server needs `mcp` 1.x (`mcp>=1.2.0,<2`), because version 2 renamed `FastMCP`. The install picks the right version for you.
+
+## Configuration
+
+The server reads these environment variables. It does not read a `.env` file, so set them in the `env` block of your MCP client config, as in the examples above, or in the shell that starts it. `.env.example` lists the names.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -25,29 +117,14 @@ All live testing so far was done against `prod`. The test host rejected the key 
 
 ## Run tests
 
-```bash
-pytest
+Install the test dependencies and run pytest:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pytest
 ```
 
-The tests use a mock HTTP transport, so they do not need a key or network access.
-
-## Use with an MCP client
-
-Example Claude Desktop config (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "robopack": {
-      "command": "/absolute/path/to/.venv/bin/robopack-mcp",
-      "env": {
-        "ROBOPACK_API_KEY": "your-key",
-        "ROBOPACK_ENV": "test"
-      }
-    }
-  }
-}
-```
+On macOS or Linux use `.venv/bin/python` instead. The tests use a mock HTTP transport, so they do not need a key or network access.
 
 ## Tools
 
