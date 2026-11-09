@@ -1,6 +1,42 @@
 # robopack-mcp
 
-An MCP server that exposes the Robopack v1 API (Intune app packaging) as tools. It uses only the native Robopack API.
+An unofficial MCP server that exposes the Robopack v1 API (Intune app packaging) as tools. It uses only the native Robopack API.
+
+This is an independent project. It is not affiliated with, endorsed by or supported by Robopack.
+
+## Quick start with uvx (no clone)
+
+[`uvx`](https://docs.astral.sh/uv/) is part of `uv`. It downloads, builds and runs the server on demand, in its own environment, the same way `npx` runs Node packages. You do not clone the repository or create a virtual environment.
+
+**1. Install uv.** On Windows: `winget install -e --id astral-sh.uv`. On macOS: `brew install uv`. On any system with Python: `pipx install uv`. Open a new terminal afterwards, and restart Claude Desktop later so it sees `uvx` on the PATH. Check it with `uvx --version`.
+
+**2. Create the folders the server may use** and add the server to your MCP client. On Windows the config file is `%APPDATA%\Claude\claude_desktop_config.json`. Use absolute folder paths and double the backslashes in JSON:
+
+```json
+{
+  "mcpServers": {
+    "robopack": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/kaspersmjohansen/Robopack-MCP", "robopack-mcp"],
+      "env": {
+        "ROBOPACK_API_KEY": "your-key",
+        "ROBOPACK_ENV": "prod",
+        "ROBOPACK_UPLOAD_DIR": "C:\\Robopack\\uploads",
+        "ROBOPACK_DOWNLOAD_DIR": "C:\\Robopack\\downloads"
+      }
+    }
+  }
+}
+```
+
+**3. Restart Claude Desktop** and ask it to list your Robopack tenants.
+
+Notes:
+
+- The first start downloads and builds the package, so it takes longer than later starts.
+- Git has to be able to read the repository. If it is private, Git must be signed in to a GitHub account with access, and that is unreliable when Claude Desktop starts the server. Use the clone-and-install steps below instead.
+- `uvx` caches the build. To get a newer version, run `uv cache clean robopack-mcp` and restart Claude Desktop.
+- To stay on one version, add a tag or commit to the URL, for example `git+https://github.com/kaspersmjohansen/Robopack-MCP@<tag-or-commit>`.
 
 ## Install on Windows
 
@@ -22,7 +58,7 @@ This should print `Python 3.10` or newer. If `python` opens the Microsoft Store 
 
 **2. Install Git** if you do not have it: `winget install -e --id Git.Git`. Open a new PowerShell window afterwards.
 
-**3. Get the code.** The repository is private, so Git asks you to sign in to GitHub the first time.
+**3. Get the code.** If the repository is private, Git asks you to sign in to GitHub the first time.
 
 ```powershell
 cd $HOME
@@ -201,3 +237,7 @@ All of this was checked against the live production API.
 - **The `POST /v1/flow/create` example in the web docs conflicts with its schema.** The example sends `appId` and `packageId` together and uses `scope: 0`. The schema says they are mutually exclusive and `scope` must be 1, 2 or 4 (Machine, User, Any). The tool follows the schema. Combined `flags` bitmasks are rejected, because the schema lists only 0 and single bits up to 32768. Ask whether combinations are allowed.
 - **Analyzer for API-created packages.** An API-created package has no Analyze and Test option in the web UI. Ask whether there is an endpoint for it.
 - **AppV download.** Not tested because no App-V package is available. Test it once one exists.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

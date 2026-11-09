@@ -1,11 +1,26 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "robopack-mcp"
 version = "0.1.0"
-description = "MCP server for the Robopack v1 API (Intune app packaging)"
+description = "Unofficial MCP server for the Robopack v1 API (Intune app packaging)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Kasper Johansen" }]
+keywords = ["mcp", "model-context-protocol", "robopack", "intune", "app-packaging", "psadt"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.2.0,<2",
@@ -15,6 +30,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://github.com/kaspersmjohansen/Robopack-MCP"
+Repository = "https://github.com/kaspersmjohansen/Robopack-MCP"
+Issues = "https://github.com/kaspersmjohansen/Robopack-MCP/issues"
 
 [project.scripts]
 robopack-mcp = "robopack_mcp.server:main"
